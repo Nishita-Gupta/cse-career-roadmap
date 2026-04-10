@@ -1,7 +1,7 @@
 "use client"
 
 import { useState } from "react"
-import { Compass } from "lucide-react"
+import { Compass, Loader2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import {
@@ -16,12 +16,13 @@ import type { Year, Goal } from "@/lib/roadmap-data"
 
 interface SelectionFormProps {
   onGenerate: (year: Year, goal: Goal) => void
+  isLoading?: boolean
 }
 
 const years: Year[] = ["1st Year", "2nd Year", "3rd Year", "4th Year"]
 const goals: Goal[] = ["Placements", "Higher Studies", "GATE", "Research"]
 
-export function SelectionForm({ onGenerate }: SelectionFormProps) {
+export function SelectionForm({ onGenerate, isLoading = false }: SelectionFormProps) {
   const [year, setYear] = useState<Year | "">("")
   const [goal, setGoal] = useState<Goal | "">("")
 
@@ -43,7 +44,7 @@ export function SelectionForm({ onGenerate }: SelectionFormProps) {
           <Label htmlFor="year" className="text-sm font-medium text-muted-foreground">
             Your Current Year
           </Label>
-          <Select value={year} onValueChange={(v) => setYear(v as Year)}>
+          <Select value={year} onValueChange={(v) => setYear(v as Year)} disabled={isLoading}>
             <SelectTrigger id="year" className="bg-card text-card-foreground">
               <SelectValue placeholder="Select your year" />
             </SelectTrigger>
@@ -61,7 +62,7 @@ export function SelectionForm({ onGenerate }: SelectionFormProps) {
           <Label htmlFor="goal" className="text-sm font-medium text-muted-foreground">
             Your Career Goal
           </Label>
-          <Select value={goal} onValueChange={(v) => setGoal(v as Goal)}>
+          <Select value={goal} onValueChange={(v) => setGoal(v as Goal)} disabled={isLoading}>
             <SelectTrigger id="goal" className="bg-card text-card-foreground">
               <SelectValue placeholder="Select your goal" />
             </SelectTrigger>
@@ -77,11 +78,20 @@ export function SelectionForm({ onGenerate }: SelectionFormProps) {
 
         <Button
           onClick={handleSubmit}
-          disabled={!year || !goal}
+          disabled={!year || !goal || isLoading}
           className="w-full bg-primary text-primary-foreground hover:bg-primary/90 gap-2 text-base py-5"
         >
-          <Compass className="h-5 w-5" />
-          Generate Roadmap
+          {isLoading ? (
+            <>
+              <Loader2 className="h-5 w-5 animate-spin" />
+              Generating…
+            </>
+          ) : (
+            <>
+              <Compass className="h-5 w-5" />
+              Generate Roadmap
+            </>
+          )}
         </Button>
       </CardContent>
     </Card>
