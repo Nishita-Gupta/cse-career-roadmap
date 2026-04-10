@@ -1,4 +1,4 @@
-import neo4j, { Driver } from "neo4j-driver"
+import neo4j, { Driver, Session } from "neo4j-driver"
 
 declare global {
   // eslint-disable-next-line no-var
@@ -7,12 +7,13 @@ declare global {
 
 function createDriver(): Driver {
   const uri = process.env.NEO4J_URI
-  const user = process.env.NEO4J_USER
+  // AuraDB exports NEO4J_USERNAME; fallback to NEO4J_USER for local dev
+  const user = process.env.NEO4J_USERNAME ?? process.env.NEO4J_USER
   const password = process.env.NEO4J_PASSWORD
 
   if (!uri || !user || !password) {
     throw new Error(
-      "Missing Neo4j environment variables. Please set NEO4J_URI, NEO4J_USER, and NEO4J_PASSWORD in .env.local"
+      "Missing Neo4j env vars. Set NEO4J_URI, NEO4J_USERNAME (or NEO4J_USER), and NEO4J_PASSWORD."
     )
   }
 
@@ -28,4 +29,10 @@ export function getDriver(): Driver {
     return global._neo4jDriver
   }
   return createDriver()
+}
+
+// Create a session, using NEO4J_DATABASE if provided (required by AuraDB)
+export function getSession(driver: Driver): Session {
+  const database = process.env.NEO4J_DATABASE
+  return driver.session(database ? { database } : undefined)
 }

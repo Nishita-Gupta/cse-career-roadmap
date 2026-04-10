@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server"
-import { getDriver } from "@/lib/neo4j"
+import { getDriver, getSession } from "@/lib/neo4j"
 import type { RoadmapData } from "@/lib/roadmap-data"
 
 export async function POST(req: NextRequest) {
@@ -10,7 +10,7 @@ export async function POST(req: NextRequest) {
   }
 
   const driver = getDriver()
-  const session = driver.session()
+  const session = getSession(driver)
 
   try {
     // Fetch skills by category

@@ -11,8 +11,9 @@
 import neo4j from "neo4j-driver"
 
 const NEO4J_URI = process.env.NEO4J_URI || "bolt://localhost:7687"
-const NEO4J_USER = process.env.NEO4J_USER || "neo4j"
+const NEO4J_USER = process.env.NEO4J_USERNAME || process.env.NEO4J_USER || "neo4j"
 const NEO4J_PASSWORD = process.env.NEO4J_PASSWORD || "your_password_here"
+const NEO4J_DATABASE = process.env.NEO4J_DATABASE
 
 // ── Data ──────────────────────────────────────────────────────────────────────
 
@@ -583,7 +584,7 @@ const yearGoalPlatforms: Record<string, SeedResource[]> = {
 
 async function seed() {
   const driver = neo4j.driver(NEO4J_URI, neo4j.auth.basic(NEO4J_USER, NEO4J_PASSWORD))
-  const session = driver.session()
+  const session = driver.session(NEO4J_DATABASE ? { database: NEO4J_DATABASE } : undefined)
 
   try {
     console.log("🌱  Seeding Neo4j database…")
