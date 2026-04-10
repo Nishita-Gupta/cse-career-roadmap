@@ -1,55 +1,121 @@
 "use client"
 
-import { useEffect, useMemo, useRef, useState } from "react"
-import dynamic from "next/dynamic"
+import { useEffect, useRef, useState } from "react"
 import type { RoadmapData, Year, Goal } from "@/lib/roadmap-data"
 
-// Must be dynamically imported — uses canvas/browser APIs, not SSR-safe
-const ForceGraph2D = dynamic(() => import("react-force-graph-2d"), { ssr: false })
-
 // ── Node type config ──────────────────────────────────────────────────────────
-const NODE_CONFIG = {
-  year:         { color: "#6366f1", radius: 22, label: "Year"          },
-  goal:         { color: "#a855f7", radius: 20, label: "Career Goal"   },
-  focusArea:    { color: "#f59e0b", radius: 12, label: "Focus Area"    },
-  coreSubject:  { color: "#10b981", radius: 12, label: "Core Subject"  },
-  skill:        { color: "#06b6d4", radius: 12, label: "Skill"         },
-  platform:     { color: "#f43f5e", radius: 10, label: "Platform"      },
-  timeline:     { color: "#eab308", radius: 10, label: "Timeline"      },
+const NODE_CFG = {
+  year:        { color: "#6366f1", r: 32, label: "Year"         },
+  goal:        { color: "#a855f7", r: 42, label: "Career Goal"  },
+  focusArea:   { color: "#f59e0b", r: 22, label: "Focus Area"   },
+  coreSubject: { color: "#10b981", r: 22, label: "Core Subject" },
+  skill:       { color: "#06b6d4", r: 22, label: "Skill"        },
+  platform:    { color: "#f43f5e", r: 20, label: "Platform"     },
+  timeline:    { color: "#eab308", r: 20, label: "Timeline"     },
 } as const
 
-type NodeType = keyof typeof NODE_CONFIG
+type NodeType = keyof typeof NODE_CFG
 
-interface GraphNode {
-  id: string
-  label: string
-  type: NodeType
-  nodeRadius: number
-  url?: string
-  x?: number
-  y?: number
+interface GNode { id: string; label: string; type: NodeType; x: number; y: number; url?: string }
+interface GEdge { src: string; tgt: string; rel: string }
+
+// ── Layout builder ────────────────────────────────────────────────────────────
+function buildGraph(
+  data: RoadmapData, year: Year, goal: Goal, cx: number, cy: number
+): { nodes: GNode[]; edges: GEdge[] } {
+  const nodes: GNode[] = []
+  const edges: GEdge[] = []
+
+  // Centre nodes
+  nodes.push({ id: "year", label: year, type: "year", x: cx, y: cy - 220 })
+  nodes.push({ id: "goal", label: goal, type: "goal", x: cx, y:  cy })
+  edges.push({ src: "year", tgt: "goal", rel: "HAS_GOAL" })
+
+  // 5 groups fanned around Goal — angles avoid the top (where Year sits)
+  type Group = { items: { label: string; url?: string }[]; type: NodeType; rel: string; angleDeg: number }
+  const groups: Group[] = [
+    {
+      items: data.focusAreas.map((f) => ({ label: f })),
+      type: "focusArea", rel: "REQUIRES", angleDeg: 340,
+    },
+    {
+      items: data.coreSubjects.map((c) => ({ label: c })),
+      type: "coreSubject", rel: "REQUIRES", angleDeg: 55,
+    },
+    {
+      items: data.skills.map((s) => ({ label: s })),
+      type: "skill", rel: "REQUIRES", angleDeg: 115,
+    },
+    {
+      items: data.platforms.map((p) => ({ label: p.name, url: p.url })),
+      type: "platform", rel: "LEARN_FROM", angleDeg: 180,
+    },
+    {
+      items: data.timeline.map((t) => ({ label: t.phase.replace(":", "").trim() })),
+      type: "timeline", rel: "HAS_TIMELINE", angleDeg: 248,
+    },
+  ]
+
+  const RADIUS = 270
+  const SPREAD = 38 // degrees of arc spread per group
+
+  groups.forEach(({ items, type, rel, angleDeg }) => {
+    const count = items.length
+    items.forEach((item, i) => {
+      const offset = count > 1 ? (i / (count - 1) - 0.5) * SPREAD * 2 : 0
+      const rad = ((angleDeg + offset) * Math.PI) / 180
+      const id = `${type}_${i}`
+      nodes.push({
+        id,
+        label: item.label,
+        type,
+        x: cx + Math.cos(rad) * RADIUS,
+        y: cy + Math.sin(rad) * RADIUS,
+        url: item.url,
+      })
+      edges.push({ src: "goal", tgt: id, rel })
+    })
+  })
+
+  return { nodes, edges }
 }
 
-interface GraphLink {
-  source: string
-  target: string
-  label: string
+// ── Text wrapping ─────────────────────────────────────────────────────────────
+function wrapText(text: string, maxChars: number): string[] {
+  const words = text.split(" ")
+  const lines: string[] = []
+  let cur = ""
+  for (const w of words) {
+    const candidate = cur ? `${cur} ${w}` : w
+    if (candidate.length > maxChars && cur) { lines.push(cur); cur = w }
+    else cur = candidate
+  }
+  if (cur) lines.push(cur)
+  return lines.slice(0, 3)
 }
 
-interface RoadmapGraphProps {
-  data: RoadmapData
-  year: Year
-  goal: Goal
+// ── Edge geometry (trim to circle edge) ──────────────────────────────────────
+function edgePts(src: GNode, tgt: GNode) {
+  const dx = tgt.x - src.x
+  const dy = tgt.y - src.y
+  const d  = Math.hypot(dx, dy) || 1
+  const sr = NODE_CFG[src.type].r
+  const tr = NODE_CFG[tgt.type].r
+  const nx = dx / d; const ny = dy / d
+  return {
+    x1: src.x + nx * (sr + 3),
+    y1: src.y + ny * (sr + 3),
+    x2: tgt.x - nx * (tr + 10), // +10 for arrowhead
+    y2: tgt.y - ny * (tr + 10),
+  }
 }
 
-function wrapText(text: string, maxLen = 18): string {
-  return text.length > maxLen ? text.slice(0, maxLen) + "…" : text
-}
-
-export function RoadmapGraph({ data, year, goal }: RoadmapGraphProps) {
+// ── Component ─────────────────────────────────────────────────────────────────
+export function RoadmapGraph({ data, year, goal }: { data: RoadmapData; year: Year; goal: Goal }) {
   const containerRef = useRef<HTMLDivElement>(null)
-  const [width, setWidth] = useState(800)
-  const height = 560
+  const [width, setWidth] = useState(860)
+  const [tooltip, setTooltip] = useState<{ text: string; x: number; y: number } | null>(null)
+  const height = 620
 
   useEffect(() => {
     const update = () => {
@@ -60,163 +126,141 @@ export function RoadmapGraph({ data, year, goal }: RoadmapGraphProps) {
     return () => window.removeEventListener("resize", update)
   }, [])
 
-  const graphData = useMemo(() => {
-    const nodes: GraphNode[] = []
-    const links: GraphLink[] = []
-
-    const add = (node: GraphNode) => nodes.push(node)
-    const link = (source: string, target: string, label: string) =>
-      links.push({ source, target, label })
-
-    // Year → Goal
-    add({ id: "year", label: year, type: "year", nodeRadius: NODE_CONFIG.year.radius })
-    add({ id: "goal", label: goal, type: "goal", nodeRadius: NODE_CONFIG.goal.radius })
-    link("year", "goal", "HAS_GOAL")
-
-    // Focus Areas
-    data.focusAreas.forEach((fa, i) => {
-      const id = `fa_${i}`
-      add({ id, label: fa, type: "focusArea", nodeRadius: NODE_CONFIG.focusArea.radius })
-      link("goal", id, "REQUIRES")
-    })
-
-    // Core Subjects
-    data.coreSubjects.forEach((cs, i) => {
-      const id = `cs_${i}`
-      add({ id, label: cs, type: "coreSubject", nodeRadius: NODE_CONFIG.coreSubject.radius })
-      link("goal", id, "REQUIRES")
-    })
-
-    // Skills
-    data.skills.forEach((sk, i) => {
-      const id = `sk_${i}`
-      add({ id, label: sk, type: "skill", nodeRadius: NODE_CONFIG.skill.radius })
-      link("goal", id, "REQUIRES")
-    })
-
-    // Platforms (Resources)
-    data.platforms.forEach((pl, i) => {
-      const id = `pl_${i}`
-      add({ id, label: pl.name, type: "platform", nodeRadius: NODE_CONFIG.platform.radius, url: pl.url })
-      link("goal", id, "LEARN_FROM")
-    })
-
-    // Timeline phases
-    data.timeline.forEach((t, i) => {
-      const id = `tl_${i}`
-      add({ id, label: t.phase.replace(":", ""), type: "timeline", nodeRadius: NODE_CONFIG.timeline.radius })
-      link("goal", id, "HAS_TIMELINE")
-    })
-
-    return { nodes, links }
-  }, [data, year, goal])
-
-  const paintNode = (node: GraphNode, ctx: CanvasRenderingContext2D, globalScale: number) => {
-    const { color, radius } = NODE_CONFIG[node.type]
-    const r = radius
-    const x = node.x ?? 0
-    const y = node.y ?? 0
-
-    // Glow / shadow
-    ctx.shadowColor = color
-    ctx.shadowBlur = 12
-
-    // Circle
-    ctx.beginPath()
-    ctx.arc(x, y, r, 0, 2 * Math.PI)
-    ctx.fillStyle = color
-    ctx.fill()
-    ctx.strokeStyle = "rgba(255,255,255,0.25)"
-    ctx.lineWidth = 1.5
-    ctx.stroke()
-
-    ctx.shadowBlur = 0
-
-    // Label inside node for large nodes, below for small
-    const fontSize = Math.max(8, Math.min(r * 0.55, 13))
-    ctx.font = `bold ${fontSize}px Inter, sans-serif`
-    ctx.textAlign = "center"
-    ctx.textBaseline = "middle"
-
-    if (r >= 18) {
-      // Large nodes: two-line inside
-      const words = node.label.split(" ")
-      const half = Math.ceil(words.length / 2)
-      const line1 = words.slice(0, half).join(" ")
-      const line2 = words.slice(half).join(" ")
-      ctx.fillStyle = "#fff"
-      if (line2) {
-        ctx.fillText(wrapText(line1, 10), x, y - fontSize * 0.6)
-        ctx.fillText(wrapText(line2, 10), x, y + fontSize * 0.6)
-      } else {
-        ctx.fillText(wrapText(line1, 12), x, y)
-      }
-    } else if (globalScale > 0.5) {
-      // Small nodes: short label below
-      ctx.font = `${Math.max(6, 9 / globalScale)}px Inter, sans-serif`
-      ctx.fillStyle = "rgba(255,255,255,0.85)"
-      ctx.fillText(wrapText(node.label, 16), x, y + r + 8 / globalScale)
-    }
-  }
+  const cx = width  / 2
+  const cy = height / 2 - 10
+  const { nodes, edges } = buildGraph(data, year, goal, cx, cy)
+  const byId = Object.fromEntries(nodes.map((n) => [n.id, n]))
 
   return (
-    <div className="flex flex-col gap-6">
-      {/* Graph canvas */}
+    <div className="flex flex-col gap-5">
+      {/* Graph */}
       <div
         ref={containerRef}
-        className="w-full overflow-hidden rounded-2xl border border-border"
-        style={{ background: "#0f172a", height }}
+        className="w-full rounded-2xl overflow-hidden border border-white/10"
+        style={{ height, background: "#0d1117" }}
       >
-        {width > 0 && (
-          <ForceGraph2D
-            graphData={graphData as any}
-            width={width}
-            height={height}
-            backgroundColor="#0f172a"
-            /* nodes */
-            nodeVal={(n: any) => (n.nodeRadius as number) * 2}
-            nodeColor={(n: any) => NODE_CONFIG[n.type as NodeType].color}
-            nodeCanvasObject={(n: any, ctx, gs) => paintNode(n as GraphNode, ctx, gs)}
-            nodeCanvasObjectMode={() => "replace"}
-            /* links */
-            linkColor={() => "rgba(148,163,184,0.45)"}
-            linkWidth={1.5}
-            linkDirectionalArrowLength={5}
-            linkDirectionalArrowRelPos={1}
-            linkDirectionalParticles={1}
-            linkDirectionalParticleSpeed={0.004}
-            linkDirectionalParticleColor={() => "rgba(148,163,184,0.8)"}
-            linkLabel={(l: any) => l.label}
-            /* physics */
-            d3AlphaDecay={0.02}
-            d3VelocityDecay={0.3}
-            cooldownTicks={120}
-            onNodeClick={(n: any) => {
-              if (n.url) window.open(n.url, "_blank")
-            }}
-          />
-        )}
+        <svg width={width} height={height} style={{ display: "block" }}>
+          <defs>
+            {/* Arrow marker */}
+            <marker id="arrowhead" viewBox="0 -5 10 10" refX="9" refY="0"
+              markerWidth="5" markerHeight="5" orient="auto">
+              <path d="M0,-5L10,0L0,5" fill="rgba(148,163,184,0.55)" />
+            </marker>
+            {/* Per-type glow */}
+            {(Object.entries(NODE_CFG) as [NodeType, { color: string }][]).map(([t, c]) => (
+              <filter key={t} id={`glow-${t}`} x="-60%" y="-60%" width="220%" height="220%">
+                <feGaussianBlur in="SourceGraphic" stdDeviation="5" result="blur" />
+                <feColorMatrix in="blur" type="matrix"
+                  values={`0 0 0 0 ${parseInt(c.color.slice(1,3),16)/255}
+                           0 0 0 0 ${parseInt(c.color.slice(3,5),16)/255}
+                           0 0 0 0 ${parseInt(c.color.slice(5,7),16)/255}
+                           0 0 0 0.7 0`}
+                  result="glow" />
+                <feMerge><feMergeNode in="glow" /><feMergeNode in="SourceGraphic" /></feMerge>
+              </filter>
+            ))}
+          </defs>
+
+          {/* ── Edges ── */}
+          {edges.map((e, i) => {
+            const s = byId[e.src]; const t = byId[e.tgt]
+            if (!s || !t) return null
+            const { x1, y1, x2, y2 } = edgePts(s, t)
+            const mx = (x1 + x2) / 2; const my = (y1 + y2) / 2
+            const angle = Math.atan2(y2 - y1, x2 - x1) * 180 / Math.PI
+
+            return (
+              <g key={i}>
+                <line x1={x1} y1={y1} x2={x2} y2={y2}
+                  stroke="rgba(148,163,184,0.2)" strokeWidth="1.5"
+                  markerEnd="url(#arrowhead)" />
+                <text
+                  x={mx} y={my}
+                  textAnchor="middle" dominantBaseline="middle"
+                  fontSize="7.5" fontFamily="monospace" letterSpacing="0.5"
+                  fill="rgba(148,163,184,0.5)"
+                  transform={`rotate(${angle > 90 || angle < -90 ? angle + 180 : angle}, ${mx}, ${my})`}
+                  dy="-5"
+                >
+                  {e.rel}
+                </text>
+              </g>
+            )
+          })}
+
+          {/* ── Nodes ── */}
+          {nodes.map((node) => {
+            const cfg   = NODE_CFG[node.type]
+            const lines = wrapText(node.label, cfg.r > 30 ? 9 : 12)
+            const lh    = cfg.r > 30 ? 12 : 10
+            const totalH = lines.length * lh
+
+            return (
+              <g key={node.id}
+                style={{ cursor: node.url ? "pointer" : "default" }}
+                onClick={() => node.url && window.open(node.url, "_blank")}
+                onMouseEnter={() => setTooltip({ text: node.label, x: node.x, y: node.y - cfg.r - 14 })}
+                onMouseLeave={() => setTooltip(null)}
+              >
+                {/* Halo */}
+                <circle cx={node.x} cy={node.y} r={cfg.r + 6}
+                  fill="none" stroke={cfg.color} strokeWidth="1" opacity="0.2" />
+                {/* Body */}
+                <circle cx={node.x} cy={node.y} r={cfg.r}
+                  fill={cfg.color} filter={`url(#glow-${node.type})`} />
+                {/* Rim */}
+                <circle cx={node.x} cy={node.y} r={cfg.r}
+                  fill="none" stroke="rgba(255,255,255,0.2)" strokeWidth="1.5" />
+                {/* Label */}
+                {lines.map((line, li) => (
+                  <text key={li}
+                    x={node.x}
+                    y={node.y - totalH / 2 + li * lh + lh * 0.7}
+                    textAnchor="middle" dominantBaseline="middle"
+                    fontSize={cfg.r > 30 ? "10" : "8.5"}
+                    fontWeight="700"
+                    fill="#fff"
+                    fontFamily="Inter, sans-serif"
+                    style={{ pointerEvents: "none", userSelect: "none" }}
+                  >
+                    {line}
+                  </text>
+                ))}
+              </g>
+            )
+          })}
+
+          {/* ── Tooltip ── */}
+          {tooltip && (() => {
+            const pad = 8; const w = 180
+            return (
+              <g>
+                <rect x={tooltip.x - w / 2} y={tooltip.y - 14}
+                  width={w} height={20} rx="5"
+                  fill="#1e293b" stroke="rgba(148,163,184,0.3)" strokeWidth="1" />
+                <text x={tooltip.x} y={tooltip.y - 4}
+                  textAnchor="middle" fontSize="9" fill="#e2e8f0"
+                  fontFamily="Inter, sans-serif">
+                  {tooltip.text.length > 38 ? tooltip.text.slice(0, 38) + "…" : tooltip.text}
+                </text>
+              </g>
+            )
+          })()}
+        </svg>
       </div>
 
       {/* Legend */}
-      <div className="flex flex-wrap justify-center gap-3">
-        {(Object.entries(NODE_CONFIG) as [NodeType, typeof NODE_CONFIG[NodeType]][]).map(
-          ([type, cfg]) => (
-            <div key={type} className="flex items-center gap-1.5 text-xs text-muted-foreground">
-              <span
-                className="inline-block h-3 w-3 rounded-full shrink-0"
-                style={{ background: cfg.color }}
-              />
-              {cfg.label}
-            </div>
-          )
-        )}
-        <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-          <span className="text-primary">↗</span> Click platform nodes to open
-        </div>
+      <div className="flex flex-wrap justify-center gap-x-5 gap-y-2">
+        {(Object.entries(NODE_CFG) as [NodeType, { color: string; label: string }][]).map(([t, c]) => (
+          <span key={t} className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <span className="h-2.5 w-2.5 rounded-full shrink-0" style={{ background: c.color }} />
+            {c.label}
+          </span>
+        ))}
+        <span className="text-xs text-muted-foreground">· Hover nodes for full text · Click platforms to open</span>
       </div>
 
-      {/* Timeline detail strip */}
+      {/* Timeline strip */}
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         {data.timeline.map((t) => (
           <div key={t.phase} className="rounded-lg bg-muted p-3 text-sm">
